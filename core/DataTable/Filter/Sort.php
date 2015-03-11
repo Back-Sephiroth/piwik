@@ -24,6 +24,7 @@ use Piwik\Metrics;
 class Sort extends BaseFilter
 {
     protected $columnToSort;
+    protected $secondaryColumnToSort;
     protected $order;
 
     /**
@@ -60,6 +61,38 @@ class Sort extends BaseFilter
         } else {
             $this->order = 'desc';
         }
+    }
+
+    /**
+     * See {@link Sort}.
+     *
+     * @param DataTable $table
+     * @return mixed
+     */
+    public function filter($table)
+    {
+        if ($table instanceof Simple) {
+            return;
+        }
+
+        if (empty($this->columnToSort)) {
+            return;
+        }
+
+        if (!$table->getRowsCountWithoutSummaryRow()) {
+            return;
+        }
+
+        $row = $table->getFirstRow();
+
+        if ($row === false) {
+            return;
+        }
+
+        $this->columnToSort = $this->selectColumnToSort($row);
+        $this->secondaryColumnToSort = $this->selectSecondaryColumnToSort($row, $this->columnToSort);
+
+        $this->sort($table, null);
     }
 
     protected function getColumnValue(Row $row)
@@ -113,34 +146,36 @@ class Sort extends BaseFilter
     }
 
     /**
-     * See {@link Sort}.
+     * Get the secondary sort column to be used for sorting
      *
-     * @param DataTable $table
-     * @return mixed
+     * @param Row $row
+     * @param string|int $firstColumnToSort
+     * @return int
      */
-    public function filter($table)
+    protected function selectSecondaryColumnToSort($row, $firstColumnToSort)
     {
-        if ($table instanceof Simple) {
-            return;
+        $defaultSecondaryColumn = array(Metrics::INDEX_NB_VISITS, 'nb_visits');
+
+        if (in_array($firstColumnToSort, $defaultSecondaryColumn)) {
+            // if sorted by visits, then sort by label as a secondary column
+            $column = 'label';
+            $value  = $row->getColumn($column);
+            if ($value !== false) {
+                return $column;
+            }
         }
 
-        if (empty($this->columnToSort)) {
-            return;
+        if ($firstColumnToSort !== 'label') {
+            // we do not add this by default to make sure we do not sort by label as a first and secondary column
+            $defaultSecondaryColumn[] = 'label';
         }
 
-        if (!$table->getRowsCountWithoutSummaryRow()) {
-            return;
+        foreach ($defaultSecondaryColumn as $column) {
+            $value = $row->getColumn($column);
+            if ($value !== false) {
+                return $column;
+            }
         }
-
-        $row = $table->getFirstRow();
-
-        if ($row === false) {
-            return;
-        }
-
-        $this->columnToSort = $this->selectColumnToSort($row);
-
-        $this->sort($table, null);
     }
 
     /**
@@ -181,26 +216,32 @@ class Sort extends BaseFilter
             $order = SORT_ASC;
         }
 
-        if ($sortFlags === SORT_NUMERIC) {
-            $labels = array();
+        if ($sortFlags === SORT_NUMERIC && $this->secondaryColumnToSort) {
+            $secondaryValues = array();
             foreach ($rowsWithValues as $key => $row) {
-                $labels[$key] = $row->getColumn('label');
+                $secondaryValues[$key] = $row->getColumn($this->secondaryColumnToSort);
             }
 
-            $labelOrder = SORT_ASC;
-            if ($this->order === 'asc') {
-                $labelOrder = SORT_DESC;
+            $secondarySortFlag = $sortFlags;
+            $secondaryColumnOrder = $order;
+
+            if ($this->secondaryColumnToSort === 'label') {
+                $secondarySortFlag = SORT_NATURAL | SORT_FLAG_CASE;
+                $secondaryColumnOrder = SORT_ASC;
+                if ($this->order === 'asc') {
+                    $secondaryColumnOrder = SORT_DESC;
+                }
             }
 
-            array_multisort($newValues, $order, $sortFlags, $labels, $labelOrder, SORT_NATURAL | SORT_FLAG_CASE, $rowsWithValues);
+            array_multisort($newValues, $order, $sortFlags, $secondaryValues, $secondaryColumnOrder, $secondarySortFlag, $rowsWithValues);
 
             if (!empty($rowsWithoutValues)) {
-                $labelsNoValues = array();
+                $secondaryValues = array();
                 foreach ($rowsWithoutValues as $key => $row) {
-                    $labelsNoValues[$key] = $row->getColumn('label');
+                    $secondaryValues[$key] = $row->getColumn($this->secondaryColumnToSort);
                 }
 
-                array_multisort($labelsNoValues, $order, SORT_NATURAL | SORT_FLAG_CASE, $rowsWithoutValues);
+                array_multisort($secondaryValues, $secondaryColumnOrder, $secondarySortFlag, $rowsWithoutValues);
             }
 
         } else {
