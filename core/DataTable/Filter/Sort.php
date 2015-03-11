@@ -21,8 +21,7 @@ use Piwik\Metrics;
  *
  * @api
  */
-class
-Sort extends BaseFilter
+class Sort extends BaseFilter
 {
     protected $columnToSort;
     protected $order;
@@ -58,100 +57,21 @@ Sort extends BaseFilter
     {
         if ($order == 'asc') {
             $this->order = 'asc';
-            $this->sign  = 1;
         } else {
             $this->order = 'desc';
-            $this->sign  = -1;
         }
     }
 
-    /**
-     * Sorting method used for sorting numbers
-     *
-     * @param Row $a
-     * @param Row $b
-     * @return int
-     */
-    public function numberSort($rowA, $rowB)
+    protected function getColumnValue(Row $row)
     {
-        if (isset($rowA[0]) && isset($rowB[0])) {
-            if ($rowA[0] != $rowB[0] || !isset($rowA[1])) {
-                return $this->sign * ($rowA[0] < $rowB[0] ? -1 : 1);
-            } else {
-                return -1 * $this->sign * strnatcasecmp($rowA[1], $rowB[1]);
-            }
-        } elseif (!isset($rowB[0])) {
-            return -1;
-        } elseif (!isset($rowA[0])) {
-            return 1;
-        }
-
-        return 0;
-    }
-
-    /**
-     * Sorting method used for sorting values natural
-     *
-     * @param mixed $a
-     * @param mixed $b
-     * @return int
-     */
-    function naturalSort($rowA, $rowB)
-    {
-        $valA = $rowA[0];
-        $valB = $rowB[0];
-
-        return !isset($valA)
-        && !isset($valB)
-            ? 0
-            : (!isset($valA)
-                ? 1
-                : (!isset($valB)
-                    ? -1
-                    : $this->sign * strnatcasecmp(
-                        $valA,
-                        $valB
-                    )
-                )
-            );
-    }
-
-    /**
-     * Sorting method used for sorting values
-     *
-     * @param mixed $a
-     * @param mixed $b
-     * @return int
-     */
-    function sortString($rowA, $rowB)
-    {
-        $valA = $rowA[0];
-        $valB = $rowB[0];
-
-        return !isset($valA)
-        && !isset($valB)
-            ? 0
-            : (!isset($valA)
-                ? 1
-                : (!isset($valB)
-                    ? -1
-                    : $this->sign *
-                    strcasecmp($valA,
-                        $valB
-                    )
-                )
-            );
-    }
-
-    protected function getColumnValue(Row $table )
-    {
-        $value = $table->getColumn($this->columnToSort);
+        $value = $row->getColumn($this->columnToSort);
 
         if ($value === false
             || is_array($value)
         ) {
             return null;
         }
+
         return $value;
     }
 
@@ -208,7 +128,7 @@ Sort extends BaseFilter
             return;
         }
 
-        $rows = $table->getRows();
+        $rows = $table->getRowsWithoutSummaryRow();
         if (count($rows) == 0) {
             return;
         }
@@ -220,50 +140,52 @@ Sort extends BaseFilter
 
         $this->columnToSort = $this->selectColumnToSort($row);
 
-        $value = $row->getColumn($this->columnToSort);
-        if (is_numeric($value)) {
-            $methodToUse = "numberSort";
-        } else {
-            if ($this->naturalSort) {
-                $methodToUse = "naturalSort";
-            } else {
-                $methodToUse = "sortString";
-            }
-        }
-
-        $this->sort($table, $methodToUse);
+        $this->sort($table, null);
     }
 
     /**
      * Sorts the DataTable rows using the supplied callback function.
      *
-     * @param string $functionCallback A comparison callback compatible with {@link usort}.
+     * @param string $sortFlags A comparison callback compatible with {@link usort}.
      * @param string $columnSortedBy The column name `$functionCallback` sorts by. This is stored
      *                               so we can determine how the DataTable was sorted in the future.
      */
-    private function sort(DataTable $table, $functionCallback)
+    private function sort(DataTable $table, $sortFlags)
     {
         $table->setTableSortedBy($this->columnToSort);
 
         $rows = $table->getRowsWithoutSummaryRow();
 
         // get column value and label only once for performance tweak
-        $values = array();
+        $newValues = array();
         foreach ($rows as $key => $row) {
-            $values[$key] = array($this->getColumnValue($row), $row->getColumn('label'));
+            $newValues[$key] = $this->getColumnValue($row);
         }
 
-        uasort($values, array($this, $functionCallback));
-
-        $sortedRows = array();
-        foreach ($values as $key => $value) {
-            $sortedRows[$key] = $rows[$key];
+        if (is_null($sortFlags)) {
+            $sortFlags = $this->getBestSortFlag($newValues);
         }
 
-        $table->setRows(array_values($sortedRows));
+        $order      = SORT_DESC;
+        $labelOrder = SORT_ASC;
+        if ($this->order === 'asc') {
+            $order      = SORT_ASC;
+            $labelOrder = SORT_DESC;
+        }
 
+        if ($sortFlags === SORT_NUMERIC) {
+            $labels = array();
+            foreach ($rows as $key => $row) {
+                $labels[$key] = $row->getColumn('label');
+            }
+
+            array_multisort($newValues, $order, $sortFlags, $labels, $labelOrder, SORT_NATURAL | SORT_FLAG_CASE, $rows);
+        } else {
+            array_multisort($newValues, $order, $sortFlags, $rows);
+        }
+
+        $table->setRows(array_values($rows));
         unset($rows);
-        unset($sortedRows);
 
         if ($table->isSortRecursiveEnabled()) {
             foreach ($table->getRows() as $row) {
@@ -271,11 +193,33 @@ Sort extends BaseFilter
                 $subTable = $row->getSubtable();
                 if ($subTable) {
                     $subTable->enableRecursiveSort();
-                    $this->sort($subTable, $functionCallback);
+                    $this->sort($subTable, $sortFlags);
                 }
             }
         }
 
+    }
+
+    private function getBestSortFlag($newValues)
+    {
+        $sortFlags = SORT_STRING | SORT_FLAG_CASE;
+
+        foreach ($newValues as $val) {
+            if ($val !== false && $val !== null) {
+                if (is_numeric($val)) {
+                    $sortFlags = SORT_NUMERIC;
+                } else {
+                    if ($this->naturalSort) {
+                        $sortFlags = SORT_NATURAL | SORT_FLAG_CASE;
+                    } else {
+                        $sortFlags = SORT_STRING | SORT_FLAG_CASE;
+                    }
+                }
+                return $sortFlags;
+            }
+        }
+
+        return $sortFlags;
     }
 
 }
