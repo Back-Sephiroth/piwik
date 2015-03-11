@@ -166,17 +166,21 @@ class Sort extends BaseFilter
             $sortFlags = $this->getBestSortFlag($newValues);
         }
 
-        $order      = SORT_DESC;
-        $labelOrder = SORT_ASC;
+        $order = SORT_DESC;
         if ($this->order === 'asc') {
-            $order      = SORT_ASC;
-            $labelOrder = SORT_DESC;
+            $order = SORT_ASC;
         }
 
         if ($sortFlags === SORT_NUMERIC) {
+
             $labels = array();
             foreach ($rows as $key => $row) {
                 $labels[$key] = $row->getColumn('label');
+            }
+
+            $labelOrder = SORT_ASC;
+            if ($this->order === 'asc') {
+                $labelOrder = SORT_DESC;
             }
 
             array_multisort($newValues, $order, $sortFlags, $labels, $labelOrder, SORT_NATURAL | SORT_FLAG_CASE, $rows);
