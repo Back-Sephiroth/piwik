@@ -129,7 +129,7 @@ class Sort extends BaseFilter
         }
 
         $rows = $table->getRowsWithoutSummaryRow();
-        if (count($rows) == 0) {
+        if (count($rows) === 0) {
             return;
         }
 
@@ -156,14 +156,24 @@ class Sort extends BaseFilter
 
         $rows = $table->getRowsWithoutSummaryRow();
 
+        $rowsWithValues = array();
+        $rowsWithoutValues = array();
+
         // get column value and label only once for performance tweak
         $newValues = array();
         foreach ($rows as $key => $row) {
-            $newValues[$key] = $this->getColumnValue($row);
+            $value = $this->getColumnValue($row);
+            if (isset($value)) {
+                $newValues[$key] = $value;
+                $rowsWithValues[$key] = $row;
+            } else {
+                $rowsWithoutValues[$key] = $row;
+            }
         }
+        unset($rows);
 
         if (is_null($sortFlags)) {
-            $sortFlags = $this->getBestSortFlag($newValues);
+            $sortFlags = $this->getBestSortFlags(reset($newValues));
         }
 
         $order = SORT_DESC;
@@ -172,9 +182,8 @@ class Sort extends BaseFilter
         }
 
         if ($sortFlags === SORT_NUMERIC) {
-
             $labels = array();
-            foreach ($rows as $key => $row) {
+            foreach ($rowsWithValues as $key => $row) {
                 $labels[$key] = $row->getColumn('label');
             }
 
@@ -183,13 +192,28 @@ class Sort extends BaseFilter
                 $labelOrder = SORT_DESC;
             }
 
-            array_multisort($newValues, $order, $sortFlags, $labels, $labelOrder, SORT_NATURAL | SORT_FLAG_CASE, $rows);
+            array_multisort($newValues, $order, $sortFlags, $labels, $labelOrder, SORT_NATURAL | SORT_FLAG_CASE, $rowsWithValues);
+
+            if (!empty($rowsWithoutValues)) {
+                $labelsNoValues = array();
+                foreach ($rowsWithoutValues as $key => $row) {
+                    $labelsNoValues[$key] = $row->getColumn('label');
+                }
+
+                array_multisort($labelsNoValues, $labelOrder, SORT_NATURAL | SORT_FLAG_CASE, $rowsWithoutValues);
+            }
+
         } else {
-            array_multisort($newValues, $order, $sortFlags, $rows);
+            array_multisort($newValues, $order, $sortFlags, $rowsWithValues);
         }
 
-        $table->setRows(array_values($rows));
-        unset($rows);
+        foreach ($rowsWithoutValues as $row) {
+            $rowsWithValues[] = $row;
+        }
+
+        $table->setRows(array_values($rowsWithValues));
+        unset($rowsWithValues);
+        unset($rowsWithoutValues);
 
         if ($table->isSortRecursiveEnabled()) {
             foreach ($table->getRows() as $row) {
@@ -201,25 +225,17 @@ class Sort extends BaseFilter
                 }
             }
         }
-
     }
 
-    private function getBestSortFlag($newValues)
+    private function getBestSortFlags($value)
     {
-        $sortFlags = SORT_STRING | SORT_FLAG_CASE;
-
-        foreach ($newValues as $val) {
-            if ($val !== false && $val !== null) {
-                if (is_numeric($val)) {
-                    $sortFlags = SORT_NUMERIC;
-                } else {
-                    if ($this->naturalSort) {
-                        $sortFlags = SORT_NATURAL | SORT_FLAG_CASE;
-                    } else {
-                        $sortFlags = SORT_STRING | SORT_FLAG_CASE;
-                    }
-                }
-                return $sortFlags;
+        if (is_numeric($value)) {
+            $sortFlags = SORT_NUMERIC;
+        } else {
+            if ($this->naturalSort) {
+                $sortFlags = SORT_NATURAL | SORT_FLAG_CASE;
+            } else {
+                $sortFlags = SORT_STRING | SORT_FLAG_CASE;
             }
         }
 
