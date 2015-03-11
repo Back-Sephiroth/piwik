@@ -128,12 +128,12 @@ class Sort extends BaseFilter
             return;
         }
 
-        $rows = $table->getRowsWithoutSummaryRow();
-        if (count($rows) === 0) {
+        if (!$table->getRowsCountWithoutSummaryRow()) {
             return;
         }
 
-        $row = current($rows);
+        $row = $table->getFirstRow();
+
         if ($row === false) {
             return;
         }
@@ -164,10 +164,10 @@ class Sort extends BaseFilter
         foreach ($rows as $key => $row) {
             $value = $this->getColumnValue($row);
             if (isset($value)) {
-                $newValues[$key] = $value;
-                $rowsWithValues[$key] = $row;
+                $newValues[] = $value;
+                $rowsWithValues[] = $row;
             } else {
-                $rowsWithoutValues[$key] = $row;
+                $rowsWithoutValues[] = $row;
             }
         }
         unset($rows);
@@ -200,7 +200,7 @@ class Sort extends BaseFilter
                     $labelsNoValues[$key] = $row->getColumn('label');
                 }
 
-                array_multisort($labelsNoValues, $labelOrder, SORT_NATURAL | SORT_FLAG_CASE, $rowsWithoutValues);
+                array_multisort($labelsNoValues, $order, SORT_NATURAL | SORT_FLAG_CASE, $rowsWithoutValues);
             }
 
         } else {
@@ -211,7 +211,8 @@ class Sort extends BaseFilter
             $rowsWithValues[] = $row;
         }
 
-        $table->setRows(array_values($rowsWithValues));
+        $rowsWithValues = array_values($rowsWithValues);
+        $table->setRows($rowsWithValues);
         unset($rowsWithValues);
         unset($rowsWithoutValues);
 
