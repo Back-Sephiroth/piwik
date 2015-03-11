@@ -13,6 +13,7 @@ use Piwik\DataTable\Row;
 use Piwik\DataTable\Simple;
 use Piwik\DataTable;
 use Piwik\Metrics;
+use Piwik\Plugin\Metric;
 
 /**
  * Sorts a {@link DataTable} based on the value of a specific column.
@@ -89,7 +90,7 @@ class Sort extends BaseFilter
             return;
         }
 
-        $this->columnToSort = $this->selectColumnToSort($row);
+        $this->columnToSort = $this->selectColumnToSort($table, $row);
         $this->secondaryColumnToSort = $this->selectSecondaryColumnToSort($row, $this->columnToSort);
 
         $this->sort($table);
@@ -112,30 +113,18 @@ class Sort extends BaseFilter
      * @param Row $row
      * @return int
      */
-    private function selectColumnToSort($row)
+    private function selectColumnToSort(DataTable $table, $row)
     {
-        $value = $row->getColumn($this->columnToSort);
-        if ($value !== false) {
-            return $this->columnToSort;
-        }
+        // we fallback to nb_visits in case columnToSort does not exist
+        $columnsToCheck = array($this->columnToSort, Metrics::INDEX_NB_VISITS);
 
-        $columnIdToName = Metrics::getMappingFromNameToId();
-        // sorting by "nb_visits" but the index is Metrics::INDEX_NB_VISITS in the table
-        if (isset($columnIdToName[$this->columnToSort])) {
-            $column = $columnIdToName[$this->columnToSort];
+        foreach ($columnsToCheck as $column) {
+            $column = Metric::getActualMetricColumn($table, $column);
+
             $value = $row->getColumn($column);
-
             if ($value !== false) {
                 return $column;
             }
-        }
-
-        // eg. was previously sorted by revenue_per_visit, but this table
-        // doesn't have this column; defaults with nb_visits
-        $column = Metrics::INDEX_NB_VISITS;
-        $value = $row->getColumn($column);
-        if ($value !== false) {
-            return $column;
         }
 
         // even though this column is not set properly in the table,
