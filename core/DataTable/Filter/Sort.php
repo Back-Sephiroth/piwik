@@ -57,9 +57,9 @@ class Sort extends BaseFilter
     public function setOrder($order)
     {
         if ($order == 'asc') {
-            $this->order = 'asc';
+            $this->order = SORT_ASC;
         } else {
-            $this->order = 'desc';
+            $this->order = SORT_DESC;
         }
     }
 
@@ -92,16 +92,14 @@ class Sort extends BaseFilter
         $this->columnToSort = $this->selectColumnToSort($row);
         $this->secondaryColumnToSort = $this->selectSecondaryColumnToSort($row, $this->columnToSort);
 
-        $this->sort($table, null);
+        $this->sort($table);
     }
 
-    protected function getColumnValue(Row $row)
+    private function getColumnValue(Row $row)
     {
         $value = $row->getColumn($this->columnToSort);
 
-        if ($value === false
-            || is_array($value)
-        ) {
+        if ($value === false || is_array($value)) {
             return null;
         }
 
@@ -114,7 +112,7 @@ class Sort extends BaseFilter
      * @param Row $row
      * @return int
      */
-    protected function selectColumnToSort($row)
+    private function selectColumnToSort($row)
     {
         $value = $row->getColumn($this->columnToSort);
         if ($value !== false) {
@@ -152,7 +150,7 @@ class Sort extends BaseFilter
      * @param string|int $firstColumnToSort
      * @return int
      */
-    protected function selectSecondaryColumnToSort($row, $firstColumnToSort)
+    private function selectSecondaryColumnToSort($row, $firstColumnToSort)
     {
         $defaultSecondaryColumn = array(Metrics::INDEX_NB_VISITS, 'nb_visits');
 
@@ -178,42 +176,43 @@ class Sort extends BaseFilter
         }
     }
 
+    private function getSecondarySortColumnOrder($secondarySortColumn)
+    {
+        $secondaryColumnOrder = $this->order;
+
+        if ($secondarySortColumn === 'label') {
+            $secondaryColumnOrder = SORT_ASC;
+            if ($this->order === SORT_ASC) {
+                $secondaryColumnOrder = SORT_DESC;
+            }
+        }
+
+        return $secondaryColumnOrder;
+    }
+
+    private function getSecondarySortFlags($secondarySortColumn, $defaultSortFlag)
+    {
+        if ($secondarySortColumn === 'label') {
+            return SORT_NATURAL | SORT_FLAG_CASE;
+        }
+
+        return $defaultSortFlag;
+    }
+
     /**
      * Sorts the DataTable rows using the supplied callback function.
      *
-     * @param string $sortFlags A comparison callback compatible with {@link usort}.
-     * @param string $columnSortedBy The column name `$functionCallback` sorts by. This is stored
-     *                               so we can determine how the DataTable was sorted in the future.
+     * @param DataTable $table The table to sort.
+     * @param int $sortFlags PHP Sort flags, eg SORT_NUMERIC. Will be automatically detected initially.
      */
-    private function sort(DataTable $table, $sortFlags)
+    private function sort(DataTable $table, $sortFlags = null)
     {
         $table->setTableSortedBy($this->columnToSort);
 
-        $rows = $table->getRowsWithoutSummaryRow();
-
-        $rowsWithValues = array();
-        $rowsWithoutValues = array();
-
-        // get column value and label only once for performance tweak
-        $newValues = array();
-        foreach ($rows as $key => $row) {
-            $value = $this->getColumnValue($row);
-            if (isset($value)) {
-                $newValues[] = $value;
-                $rowsWithValues[] = $row;
-            } else {
-                $rowsWithoutValues[] = $row;
-            }
-        }
-        unset($rows);
+        list($rowsWithValues, $rowsWithoutValues, $valuesToSort) = $this->getRowsToSort($table);
 
         if (is_null($sortFlags)) {
-            $sortFlags = $this->getBestSortFlags(reset($newValues));
-        }
-
-        $order = SORT_DESC;
-        if ($this->order === 'asc') {
-            $order = SORT_ASC;
+            $sortFlags = $this->getBestSortFlags(reset($valuesToSort));
         }
 
         if ($sortFlags === SORT_NUMERIC && $this->secondaryColumnToSort) {
@@ -222,18 +221,10 @@ class Sort extends BaseFilter
                 $secondaryValues[$key] = $row->getColumn($this->secondaryColumnToSort);
             }
 
-            $secondarySortFlag = $sortFlags;
-            $secondaryColumnOrder = $order;
+            $secondarySortFlag    = $this->getSecondarySortFlags($this->secondaryColumnToSort, $sortFlags);
+            $secondaryColumnOrder = $this->getSecondarySortColumnOrder($this->secondaryColumnToSort);
 
-            if ($this->secondaryColumnToSort === 'label') {
-                $secondarySortFlag = SORT_NATURAL | SORT_FLAG_CASE;
-                $secondaryColumnOrder = SORT_ASC;
-                if ($this->order === 'asc') {
-                    $secondaryColumnOrder = SORT_DESC;
-                }
-            }
-
-            array_multisort($newValues, $order, $sortFlags, $secondaryValues, $secondaryColumnOrder, $secondarySortFlag, $rowsWithValues);
+            array_multisort($valuesToSort, $this->order, $sortFlags, $secondaryValues, $secondaryColumnOrder, $secondarySortFlag, $rowsWithValues);
 
             if (!empty($rowsWithoutValues)) {
                 $secondaryValues = array();
@@ -243,9 +234,10 @@ class Sort extends BaseFilter
 
                 array_multisort($secondaryValues, $secondaryColumnOrder, $secondarySortFlag, $rowsWithoutValues);
             }
+            unset($secondaryValues);
 
         } else {
-            array_multisort($newValues, $order, $sortFlags, $rowsWithValues);
+            array_multisort($valuesToSort, $this->order, $sortFlags, $rowsWithValues);
         }
 
         foreach ($rowsWithoutValues as $row) {
@@ -254,19 +246,38 @@ class Sort extends BaseFilter
 
         $rowsWithValues = array_values($rowsWithValues);
         $table->setRows($rowsWithValues);
+
         unset($rowsWithValues);
         unset($rowsWithoutValues);
 
         if ($table->isSortRecursiveEnabled()) {
-            foreach ($table->getRows() as $row) {
+            $this->sortRecursive($table, $sortFlags);
+        }
+    }
 
-                $subTable = $row->getSubtable();
-                if ($subTable) {
-                    $subTable->enableRecursiveSort();
-                    $this->sort($subTable, $sortFlags);
-                }
+    private function getRowsToSort(DataTable $table)
+    {
+        $rows = $table->getRowsWithoutSummaryRow();
+
+        // we need to sort rows that have a value separately from rows that do not have a value since we always want
+        // to append rows that do not have a value at the end.
+        $rowsWithValues    = array();
+        $rowsWithoutValues = array();
+
+        $valuesToSort = array();
+        foreach ($rows as $key => $row) {
+            $value = $this->getColumnValue($row);
+            if (isset($value)) {
+                $valuesToSort[] = $value;
+                $rowsWithValues[] = $row;
+            } else {
+                $rowsWithoutValues[] = $row;
             }
         }
+
+        unset($rows);
+
+        return array($rowsWithValues, $rowsWithoutValues, $valuesToSort);
     }
 
     private function getBestSortFlags($value)
@@ -282,6 +293,18 @@ class Sort extends BaseFilter
         }
 
         return $sortFlags;
+    }
+
+    private function sortRecursive(DataTable $table, $sortFlags)
+    {
+        foreach ($table->getRows() as $row) {
+
+            $subTable = $row->getSubtable();
+            if ($subTable) {
+                $subTable->enableRecursiveSort();
+                $this->sort($subTable, $sortFlags);
+            }
+        }
     }
 
 }
