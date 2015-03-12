@@ -121,8 +121,7 @@ class Sort extends BaseFilter
         foreach ($columnsToCheck as $column) {
             $column = Metric::getActualMetricColumn($table, $column);
 
-            $value = $row->getColumn($column);
-            if ($value !== false) {
+            if ($row->hasColumn($column)) {
                 return $column;
             }
         }
@@ -167,25 +166,31 @@ class Sort extends BaseFilter
 
     private function getSecondarySortColumnOrder($secondarySortColumn)
     {
-        $secondaryColumnOrder = $this->order;
+        $order = $this->order;
 
         if ($secondarySortColumn === 'label') {
-            $secondaryColumnOrder = SORT_ASC;
+            $order = SORT_ASC;
             if ($this->order === SORT_ASC) {
-                $secondaryColumnOrder = SORT_DESC;
+                $order = SORT_DESC;
             }
         }
 
-        return $secondaryColumnOrder;
+        return $order;
     }
 
-    private function getSecondarySortFlags($secondarySortColumn, $defaultSortFlag)
+    private function getSecondarySortFlags($secondarySortColumn, $secondaryValues)
     {
         if ($secondarySortColumn === 'label') {
             return SORT_NATURAL | SORT_FLAG_CASE;
         }
 
-        return $defaultSortFlag;
+        foreach ($secondaryValues as $value) {
+            if (isset($value) && false !== $value) {
+                return $this->getBestSortFlags($secondarySortColumn, $value);
+            }
+        }
+
+        return SORT_NATURAL | SORT_FLAG_CASE;
     }
 
     /**
@@ -201,7 +206,7 @@ class Sort extends BaseFilter
         list($rowsWithValues, $rowsWithoutValues, $valuesToSort) = $this->getRowsToSort($table);
 
         if (is_null($sortFlags)) {
-            $sortFlags = $this->getBestSortFlags(reset($valuesToSort));
+            $sortFlags = $this->getBestSortFlags(reset($valuesToSort), $this->columnToSort);
         }
 
         if ($sortFlags === SORT_NUMERIC && $this->secondaryColumnToSort) {
@@ -210,7 +215,7 @@ class Sort extends BaseFilter
                 $secondaryValues[$key] = $row->getColumn($this->secondaryColumnToSort);
             }
 
-            $secondarySortFlag    = $this->getSecondarySortFlags($this->secondaryColumnToSort, $sortFlags);
+            $secondarySortFlag    = $this->getSecondarySortFlags($this->secondaryColumnToSort, $secondaryValues);
             $secondaryColumnOrder = $this->getSecondarySortColumnOrder($this->secondaryColumnToSort);
 
             array_multisort($valuesToSort, $this->order, $sortFlags, $secondaryValues, $secondaryColumnOrder, $secondarySortFlag, $rowsWithValues);
@@ -229,9 +234,7 @@ class Sort extends BaseFilter
             array_multisort($valuesToSort, $this->order, $sortFlags, $rowsWithValues);
         }
 
-        foreach ($rowsWithoutValues as $row) {
-            $rowsWithValues[] = $row;
-        }
+        $rowsWithValues = array_merge($rowsWithValues, $rowsWithoutValues);
 
         $rowsWithValues = array_values($rowsWithValues);
         $table->setRows($rowsWithValues);
@@ -269,8 +272,12 @@ class Sort extends BaseFilter
         return array($rowsWithValues, $rowsWithoutValues, $valuesToSort);
     }
 
-    private function getBestSortFlags($value)
+    private function getBestSortFlags($value, $columnToSort)
     {
+        if ($columnToSort === 'label') {
+            return SORT_NATURAL | SORT_FLAG_CASE;
+        }
+
         if (is_numeric($value)) {
             $sortFlags = SORT_NUMERIC;
         } else {
