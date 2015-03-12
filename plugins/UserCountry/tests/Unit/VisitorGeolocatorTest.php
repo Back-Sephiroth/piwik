@@ -116,11 +116,10 @@ class VisitorGeolocatorTest extends PHPUnit_Framework_TestCase
 
     public function test_get_shouldReturnCurrentProvider_IfCurrentProviderIsSet()
     {
-        Cache::setCacheGeneral(array('currentLocationProviderId' => LocationProvider\GeoIp\Pecl::ID));
-        echo "\ngeneral tracker cache contents: ".print_r(Cache::getCacheGeneral(), true)."\n";
+        Cache::setCacheGeneral(array('currentLocationProviderId' => LocationProvider\GeoIp\Php::ID));
         $geolocator = new VisitorGeolocator();
 
-        $this->assertEquals(LocationProvider\GeoIp\Pecl::ID, $geolocator->getProvider()->getId());
+        $this->assertEquals(LocationProvider\GeoIp\Php::ID, $geolocator->getProvider()->getId());
     }
 
     /**
