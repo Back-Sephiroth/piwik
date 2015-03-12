@@ -13,7 +13,7 @@ use Piwik\DataTable\Row;
 use Piwik\DataTable\Simple;
 use Piwik\DataTable;
 use Piwik\Metrics;
-use Piwik\Plugin\Metric;
+use Piwik\Metrics\Sorter;
 
 /**
  * Sorts a {@link DataTable} based on the value of a specific column.
@@ -25,8 +25,8 @@ use Piwik\Plugin\Metric;
 class Sort extends BaseFilter
 {
     protected $columnToSort;
-    protected $secondaryColumnToSort;
     protected $order;
+    protected $naturalSort;
 
     /**
      * Constructor.
@@ -46,22 +46,8 @@ class Sort extends BaseFilter
         }
 
         $this->columnToSort = $columnToSort;
-        $this->naturalSort  = $naturalSort;
-        $this->setOrder($order);
-    }
-
-    /**
-     * Updates the order
-     *
-     * @param string $order asc|desc
-     */
-    public function setOrder($order)
-    {
-        if ($order == 'asc') {
-            $this->order = SORT_ASC;
-        } else {
-            $this->order = SORT_DESC;
-        }
+        $this->naturalSort = $naturalSort;
+        $this->order = strtolower($order);
     }
 
     /**
@@ -90,215 +76,32 @@ class Sort extends BaseFilter
             return;
         }
 
-        $this->columnToSort = $this->selectColumnToSort($table, $row);
-        $this->secondaryColumnToSort = $this->selectSecondaryColumnToSort($row, $this->columnToSort);
+        $config = new Sorter\Config();
+        $sorter = new Sorter($config);
 
-        $this->sort($table);
+        $config->naturalSort = $this->naturalSort;
+        $config->primaryColumnToSort   = $sorter->getPrimaryColumnToSort($table, $this->columnToSort);
+        $config->primarySortOrder      = $sorter->getPrimarySortOrder($this->order);
+        $config->primarySortFlags      = $sorter->getBestSortFlags($table, $config->primaryColumnToSort);
+        $config->secondaryColumnToSort = $sorter->getSecondaryColumnToSort($row, $config->primaryColumnToSort);
+        $config->secondarySortOrder    = $sorter->getSecondarySortColumnOrder($this->order, $config->secondaryColumnToSort);
+        $config->secondarySortFlags    = $sorter->getBestSortFlags($table, $config->secondaryColumnToSort);
+
+        $this->sort($sorter, $table);
     }
 
-    private function getColumnValue(Row $row)
+    private function sort(Sorter $sorter, DataTable $table)
     {
-        $value = $row->getColumn($this->columnToSort);
-
-        if ($value === false || is_array($value)) {
-            return null;
-        }
-
-        return $value;
-    }
-
-    /**
-     * Sets the column to be used for sorting
-     *
-     * @param Row $row
-     * @return int
-     */
-    private function selectColumnToSort(DataTable $table, $row)
-    {
-        // we fallback to nb_visits in case columnToSort does not exist
-        $columnsToCheck = array($this->columnToSort, Metrics::INDEX_NB_VISITS);
-
-        foreach ($columnsToCheck as $column) {
-            $column = Metric::getActualMetricColumn($table, $column);
-
-            if ($row->hasColumn($column)) {
-                return $column;
-            }
-        }
-
-        // even though this column is not set properly in the table,
-        // we select it for the sort, so that the table's internal state is set properly
-        return $this->columnToSort;
-    }
-
-    /**
-     * Get the secondary sort column to be used for sorting
-     *
-     * @param Row $row
-     * @param string|int $firstColumnToSort
-     * @return int
-     */
-    private function selectSecondaryColumnToSort($row, $firstColumnToSort)
-    {
-        $defaultSecondaryColumn = array(Metrics::INDEX_NB_VISITS, 'nb_visits');
-
-        if (in_array($firstColumnToSort, $defaultSecondaryColumn)) {
-            // if sorted by visits, then sort by label as a secondary column
-            $column = 'label';
-            $value  = $row->getColumn($column);
-            if ($value !== false) {
-                return $column;
-            }
-        }
-
-        if ($firstColumnToSort !== 'label') {
-            // we do not add this by default to make sure we do not sort by label as a first and secondary column
-            $defaultSecondaryColumn[] = 'label';
-        }
-
-        foreach ($defaultSecondaryColumn as $column) {
-            $value = $row->getColumn($column);
-            if ($value !== false) {
-                return $column;
-            }
-        }
-    }
-
-    private function getSecondarySortColumnOrder($secondarySortColumn)
-    {
-        $order = $this->order;
-
-        if ($secondarySortColumn === 'label') {
-            $order = SORT_ASC;
-            if ($this->order === SORT_ASC) {
-                $order = SORT_DESC;
-            }
-        }
-
-        return $order;
-    }
-
-    private function getSecondarySortFlags($secondarySortColumn, $secondaryValues)
-    {
-        if ($secondarySortColumn === 'label') {
-            return SORT_NATURAL | SORT_FLAG_CASE;
-        }
-
-        foreach ($secondaryValues as $value) {
-            if (isset($value) && false !== $value) {
-                return $this->getBestSortFlags($secondarySortColumn, $value);
-            }
-        }
-
-        return SORT_NATURAL | SORT_FLAG_CASE;
-    }
-
-    /**
-     * Sorts the DataTable rows using the supplied callback function.
-     *
-     * @param DataTable $table The table to sort.
-     * @param int $sortFlags PHP Sort flags, eg SORT_NUMERIC. Will be automatically detected initially.
-     */
-    private function sort(DataTable $table, $sortFlags = null)
-    {
-        $table->setTableSortedBy($this->columnToSort);
-
-        list($rowsWithValues, $rowsWithoutValues, $valuesToSort) = $this->getRowsToSort($table);
-
-        if (is_null($sortFlags)) {
-            $sortFlags = $this->getBestSortFlags(reset($valuesToSort), $this->columnToSort);
-        }
-
-        if ($sortFlags === SORT_NUMERIC && $this->secondaryColumnToSort) {
-            $secondaryValues = array();
-            foreach ($rowsWithValues as $key => $row) {
-                $secondaryValues[$key] = $row->getColumn($this->secondaryColumnToSort);
-            }
-
-            $secondarySortFlag    = $this->getSecondarySortFlags($this->secondaryColumnToSort, $secondaryValues);
-            $secondaryColumnOrder = $this->getSecondarySortColumnOrder($this->secondaryColumnToSort);
-
-            array_multisort($valuesToSort, $this->order, $sortFlags, $secondaryValues, $secondaryColumnOrder, $secondarySortFlag, $rowsWithValues);
-
-            if (!empty($rowsWithoutValues)) {
-                $secondaryValues = array();
-                foreach ($rowsWithoutValues as $key => $row) {
-                    $secondaryValues[$key] = $row->getColumn($this->secondaryColumnToSort);
-                }
-
-                array_multisort($secondaryValues, $secondaryColumnOrder, $secondarySortFlag, $rowsWithoutValues);
-            }
-            unset($secondaryValues);
-
-        } else {
-            array_multisort($valuesToSort, $this->order, $sortFlags, $rowsWithValues);
-        }
-
-        $rowsWithValues = array_merge($rowsWithValues, $rowsWithoutValues);
-
-        $rowsWithValues = array_values($rowsWithValues);
-        $table->setRows($rowsWithValues);
-
-        unset($rowsWithValues);
-        unset($rowsWithoutValues);
+        $sorter->sort($table);
 
         if ($table->isSortRecursiveEnabled()) {
-            $this->sortRecursive($table, $sortFlags);
-        }
-    }
+            foreach ($table->getRows() as $row) {
+                $subTable = $row->getSubtable();
 
-    private function getRowsToSort(DataTable $table)
-    {
-        $rows = $table->getRowsWithoutSummaryRow();
-
-        // we need to sort rows that have a value separately from rows that do not have a value since we always want
-        // to append rows that do not have a value at the end.
-        $rowsWithValues    = array();
-        $rowsWithoutValues = array();
-
-        $valuesToSort = array();
-        foreach ($rows as $key => $row) {
-            $value = $this->getColumnValue($row);
-            if (isset($value)) {
-                $valuesToSort[] = $value;
-                $rowsWithValues[] = $row;
-            } else {
-                $rowsWithoutValues[] = $row;
-            }
-        }
-
-        unset($rows);
-
-        return array($rowsWithValues, $rowsWithoutValues, $valuesToSort);
-    }
-
-    private function getBestSortFlags($value, $columnToSort)
-    {
-        if ($columnToSort === 'label') {
-            return SORT_NATURAL | SORT_FLAG_CASE;
-        }
-
-        if (is_numeric($value)) {
-            $sortFlags = SORT_NUMERIC;
-        } else {
-            if ($this->naturalSort) {
-                $sortFlags = SORT_NATURAL | SORT_FLAG_CASE;
-            } else {
-                $sortFlags = SORT_STRING | SORT_FLAG_CASE;
-            }
-        }
-
-        return $sortFlags;
-    }
-
-    private function sortRecursive(DataTable $table, $sortFlags)
-    {
-        foreach ($table->getRows() as $row) {
-
-            $subTable = $row->getSubtable();
-            if ($subTable) {
-                $subTable->enableRecursiveSort();
-                $this->sort($subTable, $sortFlags);
+                if ($subTable) {
+                    $subTable->enableRecursiveSort();
+                    $this->sort($sorter, $subTable);
+                }
             }
         }
     }
