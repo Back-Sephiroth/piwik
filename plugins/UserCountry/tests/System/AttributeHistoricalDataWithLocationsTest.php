@@ -89,8 +89,8 @@ class AttributeHistoricalDataWithLocationsTest extends IntegrationTestCase
     {
         $result = $this->executeCommand('2010-01-03,2010-06-03');
 
-        $this->assertContains(
-            'Re-attribution for date range: 2010-01-03 to 2010-06-03. 35 visits to process with provider "geoip_php".',
+        $this->assertRegExp(
+            '/Re-attribution for date range: 2010-01-03 to 2010-06-03. [0-9]+ visits to process with provider "geoip_php"./',
             $result
         );
 
