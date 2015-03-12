@@ -56,6 +56,7 @@ class AttributeHistoricalDataWithLocationsTest extends IntegrationTestCase
         }
 
         self::$fixture->setLocationProvider('GeoIPCity.dat');
+        echo "\nCOUNT: ".Db::fetchOne("SELECT COUNT(*) FROM log_visit")."\n";
     }
 
     /**
